@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Privacy Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .dashboard {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .risk-high { color: #ff4444; }
+        .risk-medium { color: #ffbb33; }
+        .risk-low { color: #00C851; }
+        .tracker-list {
+            list-style: none;
+            padding: 0;
+        }
+        .tracker-item {
+            border-bottom: 1px solid #eee;
+            padding: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <h1>Privacy Dashboard</h1>
+        
+        <!-- Current Analysis -->
+        <div class="card">
+            <h2>Current Website Analysis</h2>
+            <p>URL: <a href="{{ data.current_analysis.url }}" target="_blank">{{ data.current_analysis.url }}</a></p>
+            <p>Privacy Score: {{ data.current_analysis.privacy_score }}/10</p>
+            
+            <h3>Detected Trackers</h3>
+            <ul class="tracker-list">
+                {% for tracker in data.current_analysis.trackers %}
+                <li class="tracker-item">
+                    <strong>{{ tracker.name }}</strong> ({{ tracker.category }})
+                    <br>Risk Level: <span class="risk-{{ tracker.risk_level.lower() }}">{{ tracker.risk_level }}</span>
+                    <br>{{ tracker.description }}
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        <!-- Privacy Report -->
+        <div class="card">
+            <h2>Privacy Report</h2>
+            <h3>Consent Summary</h3>
+            <p>Total Consents: {{ data.privacy_report.consent_summary.total_consents }}</p>
+            <p>Active Consents: {{ data.privacy_report.consent_summary.active_consents }}</p>
+            <p>Expired Consents: {{ data.privacy_report.consent_summary.expired_consents }}</p>
+
+            <h3>Risk Exposure</h3>
+            <p>Risk Score: {{ data.privacy_report.risk_exposure.risk_score }}/10</p>
+            <p>Risk Level: <span class="risk-{{ data.privacy_report.risk_exposure.risk_level.lower() }}">
+                {{ data.privacy_report.risk_exposure.risk_level }}
+            </span></p>
+
+            <h3>Recommendations</h3>
+            <ul>
+                {% for rec in data.privacy_report.recommendations %}
+                <li>{{ rec }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
