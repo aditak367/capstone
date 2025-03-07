@@ -1,382 +1,564 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-import json
+from datetime import datetime
 import requests
 from enum import Enum
-from collections import Counter
+import re
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
+import logging
 
-class DataCategory(Enum):
-    LOCATION = "Location Data"
-    BROWSING = "Browsing History"
-    PURCHASE = "Purchase Patterns"
-    PERSONAL = "Personal Information"
-    DEVICE = "Device Information"
-    BEHAVIORAL = "Behavioral Data"
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class TrackerCategory(Enum):
+    ESSENTIAL = "Essential"
+    FUNCTIONAL = "Functional"
+    ANALYTICS = "Analytics"
+    ADVERTISING = "Advertising"
+    SOCIAL = "Social Media"
+    FINGERPRINTING = "Fingerprinting"
+    SESSION_RECORDING = "Session Recording"
+    UNDISCLOSED = "Undisclosed"
+    MARKETING = "Marketing"
 
 @dataclass
-class ConsentRecord:
-    website: str
-    timestamp: datetime
-    data_categories: List[DataCategory]
-    purpose: str
-    expiration: Optional[datetime]
-    is_active: bool = True
-
-@dataclass
-class Tracker:
+class TrackerData:
     name: str
-    category: str
-    risk_level: str
-    data_collected: List[DataCategory]
+    category: TrackerCategory
+    url: str
+    detected_on: datetime
     description: str
-    recommendations: List[str]
-    privacy_policy_url: Optional[str] = None
-    company: Optional[str] = None
+    risk_level: int  # 1-10
+    data_collected: Set[str]
+    is_essential: bool
+    has_consent: bool
 
-class PrivacyDashboard:
-    def __init__(self):
-        self.consent_history: List[ConsentRecord] = []
-        self.site_ratings: Dict[str, float] = {}
-        self.alternatives_database: Dict[str, List[str]] = self._load_alternatives()
-        self.current_analysis = None
-
-    def _load_alternatives(self) -> Dict[str, List[str]]:
-        """
-        Load privacy-friendly alternatives database from a JSON file
-        """
-        try:
-            with open('privacy_alternatives.json', 'r') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {
-                "google.com": ["duckduckgo.com", "brave.com"],
-                "facebook.com": ["mastodon.social", "diaspora*"],
-                "youtube.com": ["peertube.social", "odysee.com"]
-            }
-
-    def _get_most_common_categories(self) -> List[DataCategory]:
-        """
-        Get the most common data categories from consent history
-        """
-        if not self.consent_history:
-            return []
-        
-        category_counts = Counter()
-        for consent in self.consent_history:
-            category_counts.update(consent.data_categories)
-        
-        return [category for category, _ in category_counts.most_common(3)]
-
-    def _analyze_consent_trend(self) -> Dict:
-        """
-        Analyze consent trends over time
-        """
-        if not self.consent_history:
-            return {"trend": "No data available"}
-        
-        # Group consents by month
-        monthly_consents = {}
-        for consent in self.consent_history:
-            month_key = consent.timestamp.strftime("%Y-%m")
-            if month_key not in monthly_consents:
-                monthly_consents[month_key] = 0
-            monthly_consents[month_key] += 1
-        
-        return {
-            "monthly_counts": monthly_consents,
-            "total_months": len(monthly_consents),
-            "average_consents_per_month": sum(monthly_consents.values()) / len(monthly_consents) if monthly_consents else 0
-        }
-
-    def _check_consent_expiration(self) -> float:
-        """
-        Check how many consents are close to expiration
-        """
-        if not self.consent_history:
-            return 0.0
-        
-        current_time = datetime.now()
-        expiring_soon = 0
-        total_active = 0
-        
-        for consent in self.consent_history:
-            if consent.is_active and consent.expiration:
-                total_active += 1
-                days_until_expiry = (consent.expiration - current_time).days
-                if 0 < days_until_expiry <= 30:  # Consents expiring within 30 days
-                    expiring_soon += 1
-        
-        return expiring_soon / total_active if total_active > 0 else 0.0
-
-    def _generate_recommendations(self) -> List[str]:
-        """
-        Generate privacy recommendations based on current state
-        """
-        recommendations = []
-        
-        # Check for expiring consents
-        expiring_ratio = self._check_consent_expiration()
-        if expiring_ratio > 0.5:
-            recommendations.append("Review and update expiring consents")
-        
-        # Check for high-risk trackers
-        if self.current_analysis and self.current_analysis.get("trackers"):
-            high_risk_trackers = [t for t in self.current_analysis["trackers"] 
-                                if t.risk_level == "High"]
-            if high_risk_trackers:
-                recommendations.append("Consider blocking high-risk trackers")
-        
-        # Check for data collection patterns
-        data_summary = self._summarize_data_collection()
-        if data_summary["total_collections"] > 10:
-            recommendations.append("Review data collection permissions")
-        
-        return recommendations
-
-    def generate_privacy_report(self, timeframe: Optional[str] = "week") -> Dict:
-        """
-        Generate a comprehensive privacy report for the specified timeframe
-        """
-        return {
-            "consent_summary": self._analyze_consent_history(),
-            "risk_exposure": self._calculate_risk_exposure(),
-            "recommendations": self._generate_recommendations(),
-            "data_collection_summary": self._summarize_data_collection()
-        }
-
-    def _analyze_consent_history(self) -> Dict:
-        """
-        Analyze and summarize consent patterns
-        """
-        current_time = datetime.now()
-        active_consents = [c for c in self.consent_history if c.is_active]
-        expired_consents = [c for c in self.consent_history if not c.is_active]
-        
-        return {
-            "total_consents": len(self.consent_history),
-            "active_consents": len(active_consents),
-            "expired_consents": len(expired_consents),
-            "most_common_categories": self._get_most_common_categories(),
-            "consent_trend": self._analyze_consent_trend()
-        }
-
-    def _calculate_risk_exposure(self) -> Dict:
-        """
-        Calculate overall privacy risk score
-        """
-        risk_score = 0.0
-        risk_factors = {
-            "active_trackers": len(self.current_analysis.get("trackers", [])),
-            "data_categories": len(set().union(*[c.data_categories for c in self.consent_history])),
-            "consent_expiration": self._check_consent_expiration()
-        }
-        
-        risk_score = min(10.0, risk_factors["active_trackers"] * 0.5 + 
-                        risk_factors["data_categories"] * 0.3 +
-                        risk_factors["consent_expiration"] * 0.2)
-        
-        return {
-            "risk_score": risk_score,
-            "risk_factors": risk_factors,
-            "risk_level": "High" if risk_score > 7 else "Medium" if risk_score > 4 else "Low"
-        }
-
-    def _summarize_data_collection(self) -> Dict:
-        """
-        Summarize types of data being collected
-        """
-        data_summary = {category: 0 for category in DataCategory}
-        
-        for consent in self.consent_history:
-            for category in consent.data_categories:
-                data_summary[category] += 1
-        
-        return {
-            "data_categories": data_summary,
-            "total_collections": sum(data_summary.values()),
-            "most_collected": max(data_summary.items(), key=lambda x: x[1])[0] if data_summary else None
-        }
-
-class PrivacyAnalyzer:
-    def __init__(self):
-        self.dashboard = PrivacyDashboard()
-        self.educational_content = self._load_educational_content()
-
-    def _load_educational_content(self) -> Dict:
-        """
-        Load educational content about different tracking technologies
-        """
-        try:
-            with open('educational_content.json', 'r') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {
-                "analytics": {
-                    "title": "Understanding Analytics",
-                    "content": "Analytics tools track website usage and user behavior...",
-                    "tips": ["Use privacy-focused analytics", "Block third-party cookies"]
-                },
-                "advertising": {
-                    "title": "Online Advertising",
-                    "content": "Advertising trackers monitor your behavior for targeted ads...",
-                    "tips": ["Use an ad blocker", "Enable tracking protection"]
-                }
-            }
-
-    def analyze_website(self, url: str) -> Dict:
-        """
-        Comprehensive website analysis
-        """
-        trackers = self._detect_trackers(url)
-        data_collection = self._analyze_data_collection(url)
-        privacy_score = self._calculate_privacy_score(url)
-        alternatives = self.dashboard.alternatives_database.get(url, [])
-
-        analysis = {
-            "url": url,
-            "trackers": trackers,
-            "data_collection": data_collection,
-            "privacy_score": privacy_score,
-            "alternatives": alternatives,
-            "educational_tips": self._get_relevant_education(trackers)
-        }
-        
-        self.dashboard.current_analysis = analysis
-        return analysis
-
-    def _detect_trackers(self, url: str) -> List[Tracker]:
-        """
-        Implement advanced tracker detection
-        """
-        return [
-            Tracker(
-                name="Google Analytics",
-                category="Analytics",
-                risk_level="Medium",
-                data_collected=[DataCategory.BROWSING, DataCategory.BEHAVIORAL],
-                description="Tracks website usage and user behavior",
-                recommendations=["Use privacy-focused analytics", "Block third-party cookies"],
-                privacy_policy_url="https://policies.google.com/privacy"
-            ),
-            Tracker(
-                name="Facebook Pixel",
-                category="Advertising",
-                risk_level="High",
-                data_collected=[DataCategory.BROWSING, DataCategory.PERSONAL],
-                description="Tracks user behavior for targeted advertising",
-                recommendations=["Use Facebook Container", "Block social media trackers"],
-                privacy_policy_url="https://www.facebook.com/privacy/explanation"
-            )
-        ]
-
-    def _analyze_data_collection(self, url: str) -> Dict[DataCategory, List[str]]:
-        """
-        Analyze what types of data are being collected
-        """
-        collection_map = {}
-        trackers = self._detect_trackers(url)
-        
-        for tracker in trackers:
-            for category in tracker.data_collected:
-                if category not in collection_map:
-                    collection_map[category] = []
-                collection_map[category].append(tracker.name)
-        
-        return collection_map
-
-    def _calculate_privacy_score(self, url: str) -> float:
-        """
-        Calculate a privacy score (0-10) based on various factors
-        """
-        score = 10.0
-        trackers = self._detect_trackers(url)
-        
-        # Deduct points based on number of trackers
-        score -= len(trackers) * 0.5
-        
-        # Deduct points based on risk levels
-        for tracker in trackers:
-            if tracker.risk_level == "High":
-                score -= 1.0
-            elif tracker.risk_level == "Medium":
-                score -= 0.5
-        
-        # Deduct points based on data categories
-        unique_categories = set()
-        for tracker in trackers:
-            unique_categories.update(tracker.data_collected)
-        score -= len(unique_categories) * 0.3
-        
-        return max(0.0, min(10.0, score))
-
-    def _get_relevant_education(self, trackers: List[Tracker]) -> List[Dict]:
-        """
-        Return relevant educational content based on detected trackers
-        """
-        education_list = []
-        for tracker in trackers:
-            if tracker.category.lower() in self.educational_content:
-                education_list.append({
-                    "tracker": tracker.name,
-                    "content": self.educational_content[tracker.category.lower()]
-                })
-        return education_list
+@dataclass
+class WebsiteData:
+    url: str
+    trackers: List[TrackerData]
+    privacy_score: int
+    privacy_explanation: str
+    risk_score: int
+    risk_explanation: str
+    scan_time: datetime
 
 class BrowserExtension:
     def __init__(self):
-        self.analyzer = PrivacyAnalyzer()
-        self.dashboard = self.analyzer.dashboard
-        self.current_analysis = None
-
-    def scan_current_page(self, url: str) -> Dict:
-        """
-        Perform comprehensive page analysis and update dashboard
-        """
-        self.current_analysis = self.analyzer.analyze_website(url)
-        return self.current_analysis
-
-    def record_consent(self, website: str, data_categories: List[DataCategory], 
-                      purpose: str, expiration: Optional[datetime] = None):
-        """
-        Record user consent for data collection
-        """
-        consent = ConsentRecord(
-            website=website,
-            timestamp=datetime.now(),
-            data_categories=data_categories,
-            purpose=purpose,
-            expiration=expiration
-        )
-        self.dashboard.consent_history.append(consent)
-
-    def get_dashboard_data(self) -> Dict:
-        """
-        Get current dashboard state for UI rendering
-        """
-        return {
-            "current_analysis": self.current_analysis,
-            "privacy_report": self.dashboard.generate_privacy_report(),
-            "consent_history": self.dashboard.consent_history,
-            "educational_content": self.analyzer.educational_content
+        self.website_data: Dict[str, WebsiteData] = {}
+        # Expanded known trackers with more patterns and variations
+        self.known_trackers = {
+            'google-analytics': {
+                'category': TrackerCategory.ANALYTICS,
+                'description': 'Google Analytics tracking',
+                'risk_level': 3,
+                'is_essential': False,
+                'patterns': [
+                    r'google-analytics.com',
+                    r'googletagmanager.com',
+                    r'gtag',
+                    r'ga\(',
+                    r'analytics\.js',
+                    r'gtm\.js'
+                ]
+            },
+            'facebook': {
+                'category': TrackerCategory.SOCIAL,
+                'description': 'Facebook tracking and social plugins',
+                'risk_level': 6,
+                'is_essential': False,
+                'patterns': [
+                    r'connect\.facebook\.net',
+                    r'facebook\.com/plugins',
+                    r'fbq\(',
+                    r'fb-pixel',
+                    r'facebook-jssdk'
+                ]
+            },
+            'doubleclick': {
+                'category': TrackerCategory.ADVERTISING,
+                'description': 'Google advertising platform',
+                'risk_level': 5,
+                'is_essential': False,
+                'patterns': [
+                    r'doubleclick\.net',
+                    r'googleadservices',
+                    r'googlesyndication'
+                ]
+            },
+            'hotjar': {
+                'category': TrackerCategory.SESSION_RECORDING,
+                'description': 'User behavior and heatmap tracking',
+                'risk_level': 7,
+                'is_essential': False,
+                'patterns': [
+                    r'hotjar\.com',
+                    r'hjsv',
+                    r'_hjSettings'
+                ]
+            },
+            'hubspot': {
+                'category': TrackerCategory.MARKETING,
+                'description': 'Marketing and analytics tracking',
+                'risk_level': 4,
+                'is_essential': False,
+                'patterns': [
+                    r'hubspot\.com',
+                    r'hs-scripts\.com',
+                    r'hs-analytics',
+                    r'_hsq'
+                ]
+            },
+            'optimizely': {
+                'category': TrackerCategory.ANALYTICS,
+                'description': 'A/B testing and optimization',
+                'risk_level': 3,
+                'is_essential': False,
+                'patterns': [
+                    r'optimizely\.com',
+                    r'optmzly',
+                    r'optimizelyDataApi'
+                ]
+            },
+            'amazon': {
+                'category': TrackerCategory.ADVERTISING,
+                'description': 'Amazon advertising and analytics',
+                'risk_level': 5,
+                'is_essential': False,
+                'patterns': [
+                    r'amazon-adsystem\.com',
+                    r'amzn\.to',
+                    r'amazon\.com/uedata'
+                ]
+            }
         }
 
-if __name__ == "__main__":
-    extension = BrowserExtension()
-    
-    # Test scanning a website
-    test_url = "https://www.lingscars.com/"
-    analysis = extension.scan_current_page(test_url)
-    print("Website Analysis:", analysis)
-    
-    # Test recording consent
-    extension.record_consent(
-        website=test_url,
-        data_categories=[DataCategory.BROWSING, DataCategory.BEHAVIORAL],
-        purpose="Analytics",
-        expiration=datetime.now() + timedelta(days=30)
-    )
-    
-    # Get dashboard data
-    dashboard_data = extension.get_dashboard_data()
-    print("\nDashboard Data:", dashboard_data)
+    def scan_current_page(self, url: str) -> Optional[WebsiteData]:
+        try:
+            logger.info(f"Starting scan for URL: {url}")
+            
+            # Normalize URL if needed
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
+            
+            # Enhanced headers to better mimic a real browser
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Referer': 'https://www.google.com/',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'cross-site',
+                'Cache-Control': 'max-age=0'
+            }
+
+            # Add specific handling for known domains
+            domain = urlparse(url).netloc.lower()
+            known_domains = {
+                'amazon.com': self._get_amazon_trackers,
+                'www.amazon.com': self._get_amazon_trackers,
+                'facebook.com': self._get_facebook_trackers,
+                'www.facebook.com': self._get_facebook_trackers
+            }
+
+            # If it's a known domain that blocks scanning, use predefined trackers
+            if domain in known_domains:
+                logger.info(f"Using predefined trackers for {domain}")
+                trackers = known_domains[domain](url)
+                return self._create_website_data(url, trackers)
+
+            try:
+                # For other sites, attempt to scan
+                response = requests.get(url, timeout=10, headers=headers, allow_redirects=True)
+                response.raise_for_status()
+                
+                soup = BeautifulSoup(response.text, 'html.parser')
+                trackers = self._detect_trackers(url, soup)
+                
+                return self._create_website_data(url, trackers)
+                    
+            except requests.RequestException as e:
+                logger.error(f"Error fetching webpage: {str(e)}", exc_info=True)
+                raise Exception(f"Failed to fetch webpage: {str(e)}")
+                
+        except Exception as e:
+            logger.error(f"Error scanning page: {str(e)}", exc_info=True)
+            raise
+
+    def _detect_trackers(self, url: str, soup: BeautifulSoup) -> List[TrackerData]:
+        """Detect trackers in the webpage with enhanced pattern matching"""
+        found_trackers = set()
+        unique_trackers = []
+        
+        try:
+            logger.info(f"Starting tracker detection for {url}")
+            page_content = str(soup).lower()  # Get full page content for pattern matching
+            
+            # Check for known domain-specific trackers first
+            domain = urlparse(url).netloc.lower()
+            if domain in ['facebook.com', 'www.facebook.com', 'm.facebook.com']:
+                facebook_trackers = self._get_facebook_trackers(url)
+                unique_trackers.extend(facebook_trackers)
+                found_trackers.add('facebook')
+            
+            # Check all script tags (both src and inline)
+            for script in soup.find_all('script'):
+                # Check script source
+                src = script.get('src', '').lower()
+                if src:
+                    self._check_source_patterns(src, found_trackers, unique_trackers, url)
+                
+                # Check inline script content
+                if script.string:
+                    self._check_content_patterns(script.string.lower(), found_trackers, unique_trackers, url)
+            
+            # Check all link tags
+            for link in soup.find_all('link'):
+                href = link.get('href', '').lower()
+                if href:
+                    self._check_source_patterns(href, found_trackers, unique_trackers, url)
+            
+            # Check img tags for tracking pixels
+            for img in soup.find_all('img'):
+                src = img.get('src', '').lower()
+                if src:
+                    self._check_source_patterns(src, found_trackers, unique_trackers, url)
+            
+            # Check meta tags
+            for meta in soup.find_all('meta'):
+                content = meta.get('content', '').lower()
+                if content:
+                    self._check_content_patterns(content, found_trackers, unique_trackers, url)
+            
+            # Check the full page content for patterns that might be missed
+            self._check_content_patterns(page_content, found_trackers, unique_trackers, url)
+            
+            logger.info(f"Found {len(unique_trackers)} unique trackers")
+            return unique_trackers
+            
+        except Exception as e:
+            logger.error(f"Error detecting trackers: {str(e)}", exc_info=True)
+            return []
+
+    def _check_source_patterns(self, source: str, found_trackers: set, unique_trackers: list, url: str):
+        """Check source URLs against known tracker patterns"""
+        for tracker_id, info in self.known_trackers.items():
+            if tracker_id not in found_trackers:
+                for pattern in info['patterns']:
+                    if re.search(pattern, source, re.I):
+                        found_trackers.add(tracker_id)
+                        unique_trackers.append(TrackerData(
+                            name=tracker_id,
+                            category=info['category'],
+                            url=url,
+                            detected_on=datetime.now(),
+                            description=info['description'],
+                            risk_level=info['risk_level'],
+                            data_collected=self._determine_data_collection(info['category']),
+                            is_essential=info.get('is_essential', False),
+                            has_consent=False
+                        ))
+                        break
+
+    def _check_content_patterns(self, content: str, found_trackers: set, unique_trackers: list, url: str):
+        """Check content against known tracker patterns"""
+        for tracker_id, info in self.known_trackers.items():
+            if tracker_id not in found_trackers:
+                for pattern in info['patterns']:
+                    if re.search(pattern, content, re.I):
+                        found_trackers.add(tracker_id)
+                        unique_trackers.append(TrackerData(
+                            name=tracker_id,
+                            category=info['category'],
+                            url=url,
+                            detected_on=datetime.now(),
+                            description=info['description'],
+                            risk_level=info['risk_level'],
+                            data_collected=self._determine_data_collection(info['category']),
+                            is_essential=info.get('is_essential', False),
+                            has_consent=False
+                        ))
+                        break
+
+    def _get_facebook_trackers(self, url: str) -> List[TrackerData]:
+        """Get the known Facebook trackers"""
+        return [
+            TrackerData(
+                name='facebook',
+                category=TrackerCategory.SOCIAL,
+                url=url,
+                detected_on=datetime.now(),
+                description='Facebook core tracking and social plugins, including user profiling, social interaction monitoring, and behavioral analysis',
+                risk_level=7,
+                data_collected={
+                    'user_profile',
+                    'social_interactions',
+                    'browsing_behavior',
+                    'device_information',
+                    'location_data',
+                    'connection_data'
+                },
+                is_essential=False,
+                has_consent=False
+            ),
+            TrackerData(
+                name='facebook-pixel',
+                category=TrackerCategory.ADVERTISING,
+                url=url,
+                detected_on=datetime.now(),
+                description='Facebook Pixel for advanced advertising tracking, conversion monitoring, and audience targeting',
+                risk_level=6,
+                data_collected={
+                    'page_views',
+                    'conversions',
+                    'custom_events',
+                    'user_actions',
+                    'purchase_behavior',
+                    'advertising_interactions'
+                },
+                is_essential=False,
+                has_consent=False
+            ),
+            TrackerData(
+                name='facebook-analytics',
+                category=TrackerCategory.ANALYTICS,
+                url=url,
+                detected_on=datetime.now(),
+                description='Facebook Analytics for detailed user behavior analysis and engagement tracking',
+                risk_level=6,
+                data_collected={
+                    'user_engagement',
+                    'session_duration',
+                    'feature_usage',
+                    'performance_metrics',
+                    'user_flow_analysis'
+                },
+                is_essential=False,
+                has_consent=False
+            )
+        ]
+
+    def _get_amazon_trackers(self, url: str) -> List[TrackerData]:
+        """Get known Amazon trackers"""
+        return [
+            TrackerData(
+                name='amazon-analytics',
+                category=TrackerCategory.ANALYTICS,
+                url=url,
+                detected_on=datetime.now(),
+                description='Amazon internal analytics and user behavior tracking',
+                risk_level=5,
+                data_collected={
+                    'browsing_history',
+                    'search_queries',
+                    'product_views',
+                    'purchase_history',
+                    'user_preferences'
+                },
+                is_essential=False,
+                has_consent=False
+            ),
+            TrackerData(
+                name='amazon-advertising',
+                category=TrackerCategory.ADVERTISING,
+                url=url,
+                detected_on=datetime.now(),
+                description='Amazon advertising and product recommendation system',
+                risk_level=6,
+                data_collected={
+                    'shopping_behavior',
+                    'product_interests',
+                    'click_patterns',
+                    'advertising_interactions'
+                },
+                is_essential=False,
+                has_consent=False
+            ),
+            TrackerData(
+                name='amazon-adsystem',
+                category=TrackerCategory.ADVERTISING,
+                url=url,
+                detected_on=datetime.now(),
+                description='Amazon third-party advertising platform',
+                risk_level=7,
+                data_collected={
+                    'third_party_interactions',
+                    'advertising_preferences',
+                    'cross_site_tracking',
+                    'demographic_data'
+                },
+                is_essential=False,
+                has_consent=False
+            ),
+            TrackerData(
+                name='google-analytics',
+                category=TrackerCategory.ANALYTICS,
+                url=url,
+                detected_on=datetime.now(),
+                description='Google Analytics tracking for website analytics',
+                risk_level=4,
+                data_collected={
+                    'page_views',
+                    'session_duration',
+                    'navigation_paths',
+                    'user_interactions'
+                },
+                is_essential=False,
+                has_consent=False
+            )
+        ]
+
+    def _determine_data_collection(self, category: TrackerCategory) -> Set[str]:
+        """Determine what data is collected based on tracker category"""
+        collections = {
+            TrackerCategory.ESSENTIAL: {'session_id'},
+            TrackerCategory.FUNCTIONAL: {'preferences', 'settings'},
+            TrackerCategory.ANALYTICS: {'page_views', 'click_events', 'scroll_depth'},
+            TrackerCategory.ADVERTISING: {'browsing_history', 'interests', 'demographics'},
+            TrackerCategory.SOCIAL: {'social_interactions', 'profile_data'},
+            TrackerCategory.SESSION_RECORDING: {'mouse_movements', 'keystrokes', 'form_inputs'},
+            TrackerCategory.FINGERPRINTING: {'device_info', 'browser_characteristics'},
+            TrackerCategory.UNDISCLOSED: {'unknown'},
+            TrackerCategory.MARKETING: {'marketing_data'}
+        }
+        return collections.get(category, set())
+
+    def _calculate_privacy_score(self, trackers: List[TrackerData]) -> tuple[int, str]:
+        """Calculate privacy score"""
+        base_score = 100
+        deductions = 0
+        explanations = []
+
+        for tracker in trackers:
+            if not tracker.is_essential:
+                deduction = tracker.risk_level * 2
+                deductions += deduction
+                explanations.append(f"{tracker.name}: -{deduction} points")
+
+        final_score = max(0, min(100, base_score - deductions))
+        explanation = self._generate_privacy_explanation(final_score, explanations)
+        return final_score, explanation
+
+    def _calculate_risk_score(self, trackers: List[TrackerData], url: str) -> tuple[int, str]:
+        """Calculate risk score"""
+        risk_points = 0
+        explanations = []
+
+        for tracker in trackers:
+            if not tracker.is_essential:
+                points = tracker.risk_level * 2
+                risk_points += points
+                explanations.append(f"{tracker.name}: +{points} points")
+
+        # Adjust score for common websites
+        if self._is_common_website(url):
+            risk_points = min(50, risk_points)
+
+        final_score = min(100, risk_points)
+        explanation = self._generate_risk_explanation(final_score, explanations)
+        return final_score, explanation
+
+    def _is_common_website(self, url: str) -> bool:
+        """Check if the website is a common, trusted domain"""
+        common_domains = {
+            'google.com', 'youtube.com', 'microsoft.com', 'apple.com',
+            'amazon.com', 'facebook.com', 'twitter.com', 'linkedin.com'
+        }
+        domain = urlparse(url).netloc.lower()
+        return any(domain.endswith(d) for d in common_domains)
+
+    def _generate_privacy_explanation(self, score: int, deductions: List[str]) -> str:
+        """Generate privacy score explanation"""
+        if score >= 80:
+            risk_level = "Low"
+            summary = "This website respects user privacy with minimal tracking."
+        elif score >= 60:
+            risk_level = "Moderate"
+            summary = "This website uses some tracking technologies but remains within normal bounds."
+        else:
+            risk_level = "High"
+            summary = "This website uses extensive tracking technologies."
+
+        return (f"Privacy Score: {score}/100 ({risk_level} Risk)\n{summary}\n" +
+                "Deductions:\n" + "\n".join(deductions))
+
+    def _generate_risk_explanation(self, score: int, factors: List[str]) -> str:
+        """Generate risk score explanation"""
+        if score < 30:
+            risk_level = "Low"
+            summary = "Standard tracking practices, generally respecting user privacy."
+        elif score < 60:
+            risk_level = "Moderate"
+            summary = "Some privacy-invasive trackers detected, but within industry norms."
+        else:
+            risk_level = "High"
+            summary = "Significant privacy concerns due to extensive tracking."
+
+        return (f"Risk Score: {score}/100 ({risk_level})\n{summary}\n" +
+                "Risk Factors:\n" + "\n".join(factors))
+
+    def _store_scan_results(self, website_data: WebsiteData):
+        """Store scan results in the website_data dictionary"""
+        try:
+            self.website_data[website_data.url] = website_data
+            logger.info(f"Stored scan results for {website_data.url}")
+        except Exception as e:
+            logger.error(f"Error storing scan results: {str(e)}", exc_info=True)
+            raise
+
+    def get_dashboard_data(self) -> Dict:
+        """Get dashboard data with website scores"""
+        return {
+            'websites': self.website_data,
+            'latest_scan': next(iter(self.website_data.values())) if self.website_data else None
+        }
+
+    def _create_website_data(self, url: str, trackers: List[TrackerData]) -> WebsiteData:
+        """Create WebsiteData object with calculated scores"""
+        privacy_score, privacy_explanation = self._calculate_privacy_score(trackers)
+        risk_score, risk_explanation = self._calculate_risk_score(trackers, url)
+        
+        website_data = WebsiteData(
+            url=url,
+            trackers=trackers,
+            privacy_score=privacy_score,
+            privacy_explanation=privacy_explanation,
+            risk_score=risk_score,
+            risk_explanation=risk_explanation,
+            scan_time=datetime.now()
+        )
+        
+        # Store the scan results
+        self._store_scan_results(website_data)
+        
+        return website_data
+
+# Test code
+extension = BrowserExtension()
+
+test_sites = [
+    'https://www.amazon.com',
+    'https://www.nytimes.com',
+    'https://www.facebook.com',
+    'https://www.weather.com',
+    'https://www.cnn.com'
+]
+
+for site in test_sites:
+    try:
+        print(f"\nTesting {site}:")
+        result = extension.scan_current_page(site)
+        if result and result.trackers:
+            print(f"Found {len(result.trackers)} trackers:")
+            for tracker in result.trackers:
+                print(f"- {tracker.name} ({tracker.category})")
+        else:
+            print("No trackers found")
+    except Exception as e:
+        print(f"Error scanning {site}: {str(e)}")
