@@ -1,9 +1,8 @@
 from flask import Flask, render_template, jsonify, request
-from browser_extension import BrowserExtension
-from datetime import datetime
+from website import Website
 
 app = Flask(__name__)
-extension = BrowserExtension()
+extension = Website()
 
 @app.route('/')
 def dashboard():
@@ -19,13 +18,12 @@ def scan_website():
     try:
         website_data = extension.scan_current_page(url)
         if website_data:
-            # Convert TrackerData objects to JSON-serializable format
             trackers = [{
                 'name': t.name,
-                'category': str(t.category),  # Convert enum to string
+                'category': t.category.value,
                 'risk_level': t.risk_level,
                 'description': t.description,
-                'data_collected': list(t.data_collected),  # Convert set to list
+                'data_collected': list(t.data_collected),
                 'is_essential': t.is_essential,
                 'has_consent': t.has_consent
             } for t in website_data.trackers]
@@ -46,7 +44,7 @@ def scan_website():
         else:
             return jsonify({'error': 'Failed to scan website'}), 500
     except Exception as e:
-        print(f"Scan error: {str(e)}")  # Server-side logging
+        print(f"Scan error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
